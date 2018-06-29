@@ -38,6 +38,7 @@ env:
   matrix:
     # Run a coverage test
     - COVERALLS="true" SETUP_CMD="${PYTEST_FLAGS} --cov=MDAnalysis"
+    - PYTHON_VERSION=3.7
     - PYTHON_VERSION=3.6
     - PYTHON_VERSION=3.4
     - PYTHON_VERSION=2.7
