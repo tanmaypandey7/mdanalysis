@@ -130,6 +130,7 @@ __all__ = [
     "waterPSF","waterDCD","rmsfArray",
     "HoomdXMLdata",
     "Make_Whole",  # for testing the function lib.mdamath.make_whole, has 9 atoms
+    "fullerene",  # for make_whole, a nice friendly C60 with bonds
     "Plength",
     "COORDINATES_XYZ",
     "COORDINATES_XYZ_BZ2",
@@ -154,7 +155,8 @@ __all__ = [
     "legacy_DCD_NAMD_coords", # frame 0 read in for SiN_tric_namd.dcd using legacy DCD reader
     "legacy_DCD_c36_coords", # frames 1 and 4 read in for tip125_tric_C36.dcd using legacy DCD reader
     "GSD",
-    "GRO_MEMPROT", "XTC_MEMPROT" # YiiP transporter in POPE:POPG lipids with Na+, Cl-, Zn2+ dummy model without water
+    "GRO_MEMPROT", "XTC_MEMPROT", # YiiP transporter in POPE:POPG lipids with Na+, Cl-, Zn2+ dummy model without water
+    "DihedralsArray", "GLYDihedralsArray" # phi and psi angles for testing Ramachandran class
 ]
 
 from pkg_resources import resource_filename
@@ -395,6 +397,7 @@ rmsfArray = resource_filename(__name__, 'data/adk_oplsaa_CA_rmsf.npy')
 HoomdXMLdata = resource_filename(__name__, 'data/C12x64.xml.bz2')
 
 Make_Whole = resource_filename(__name__, 'data/make_whole.gro')
+fullerene = resource_filename(__name__, 'data/fullerene.pdb.gz')
 
 Plength = resource_filename(__name__, 'data/plength.gro')
 Martini_membrane_gro = resource_filename(__name__, 'data/martini_dppc_chol_bilayer.gro')
@@ -412,6 +415,9 @@ ALIGN_BOUND = resource_filename(__name__, 'data/analysis/align_bound.pdb.gz')
 ALIGN_UNBOUND = resource_filename(__name__, 'data/analysis/align_unbound.pdb.gz')
 
 GSD = resource_filename(__name__, 'data/example.gsd')
+
+DihedralsArray = resource_filename(__name__, 'data/adk_oplsaa_dihedrals.npy')
+GLYDihedralsArray = resource_filename(__name__, 'data/adk_oplsaa_GLY_dihedrals.npy')
 
 # This should be the last line: clean up namespace
 del resource_filename

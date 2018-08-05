@@ -59,8 +59,12 @@ Functions
 .. autofunction:: calc_angles(atom1, atom2, atom3 [,box [, result [, backend]]])
 .. autofunction:: calc_dihedrals(atom1, atom2, atom3, atom4 [,box [, result [, backend]]])
 .. autofunction:: apply_PBC(coordinates, box [, backend])
+.. autofunction:: capped_distance(reference, configuration, max_cutoff [, min_cutoff [, box [, method]]])
+.. autofunction:: self_capped_distance(reference, max_cutoff, [, min_cutoff [, box [, method]]])
 .. autofunction:: transform_RtoS(coordinates, box [, backend])
 .. autofunction:: transform_StoR(coordinates, box [,backend])
+.. autofunction:: MDAnalysis.lib._augment.augment_coordinates(coordinates, box, radius)
+.. autofunction:: MDAnalysis.lib._augment.undo_augment(indices, translation, nreal)
 
 """
 from __future__ import division, absolute_import
@@ -70,6 +74,8 @@ import numpy as np
 from numpy.lib.utils import deprecate
 
 from .mdamath import triclinic_vectors, triclinic_box
+from ._augment import augment_coordinates, undo_augment
+
 
 
 # hack to select backend with backend=<backend> kwarg. Note that
@@ -396,6 +402,462 @@ def self_distance_array(reference, box=None, result=None, backend="serial"):
     return distances
 
 
+def capped_distance(reference, configuration, max_cutoff, min_cutoff=None,
+                    box=None, method=None):
+    """Calculates the pairs and distances within a specified distance
+
+    If a *box* is supplied, then a minimum image convention is used
+    to evaluate the distances.
+
+    An automatic guessing of optimized method to calculate the distances is
+    included in the function. An optional keyword for the method is also
+    provided. Users can override the method with this functionality.
+    Currently pkdtree and bruteforce are implemented.
+
+
+    Parameters
+    -----------
+    reference : array
+        reference coordinates array with shape ``reference.shape = (3,)``
+        or ``reference.shape = (len(reference), 3)``
+    configuration : array
+        Configuration coordinate array with shape ``reference.shape = (3,)``
+        or ``reference.shape = (len(reference), 3)``
+    max_cutoff : float
+        Maximum cutoff distance between the reference and configuration
+    min_cutoff : (optional) float
+        Minimum cutoff distance between reference and configuration [None]
+    box : (optional) array or None
+        The dimensions, if provided, must be provided in the same
+        The unitcell dimesions for this system format as returned
+        by :attr:`MDAnalysis.coordinates.base.Timestep.dimensions`:
+        ``[lx,ly, lz, alpha, beta, gamma]``. Minimum image convention
+        is applied if the box is provided [None]
+    method : (optional) 'bruteforce' or 'pkdtree' or 'None'
+        Keyword to override the automatic guessing of method built-in
+        in the function [None]
+
+    Returns
+    -------
+    pairs : array
+        Pair of indices, one from each reference and configuration such that
+        distance between them is  within the ``max_cutoff`` and ``min_cutoff``
+        pairs[i,j] contains the indices i from reference coordinates, and
+        j from configuration
+    distances : array
+        Distances corresponding to each pair of indices.
+        d[k] corresponding to the pairs[i,j] gives the distance between
+        i-th and j-th coordinate in reference and configuration respectively
+
+        .. code-block:: python
+
+            pairs, distances = capped_distances(reference, coordinates, max_cutoff)
+            for indx, [a,b] in enumerate(pairs):
+                coord1 = reference[a]
+                coord2 = configuration[b]
+                distance = distances[indx]
+
+    Note
+    -----
+    Currently only supports brute force and Periodic KDtree
+
+    .. SeeAlso:: :func:'MDAnalysis.lib.distances.distance_array'
+    .. SeeAlso:: :func:'MDAnalysis.lib.pkdtree.PeriodicKDTree'
+    """
+    if box is not None:
+        if box.shape[0] != 6:
+            raise ValueError('Box Argument is of incompatible type. The dimension'
+                         'should be either None or '
+                         'of the type [lx, ly, lz, alpha, beta, gamma]')
+    method = _determine_method(reference, configuration,
+                               max_cutoff, min_cutoff=min_cutoff,
+                               box=box, method=method)
+    pairs, dist = method(reference, configuration, max_cutoff,
+                         min_cutoff=min_cutoff, box=box)
+
+    return np.asarray(pairs), np.asarray(dist)
+
+
+def _determine_method(reference, configuration, max_cutoff, min_cutoff=None,
+                      box=None, method=None):
+    """
+    Switch between different methods based on the the optimized time.
+    All the rules to select the method based on the input can be
+    incorporated here.
+
+    Parameters
+    ----------
+    reference : array
+        reference coordinates array with shape ``reference.shape = (3,)``
+        or ``reference.shape = (len(reference), 3)``
+    configuration : array
+        Configuration coordinate array with shape ``reference.shape = (3,)``
+        or ``reference.shape = (len(reference), 3)``
+    max_cutoff : float
+        Maximum cutoff distance between the reference and configuration
+    min_cutoff : (optional) float
+        Minimum cutoff distance between reference and configuration [None]
+    box : (optional) array or None
+        The dimensions, if provided, must be provided in the same
+        The unitcell dimesions for this system format as returned
+        by :attr:`MDAnalysis.coordinates.base.Timestep.dimensions`:
+        ``[lx,ly, lz, alpha, beta, gamma]``. Minimum image convention
+        is applied if the box is provided [None]
+    method : (optional) 'bruteforce' or 'pkdtree' or 'None'
+        Keyword to override the automatic guessing of method built-in
+        in the function [None]
+
+    Returns
+    -------
+    Method : Function object
+        Returns function object based on the rules and specified method
+
+    Note
+    ----
+    Currently implemented methods are present in the ``methods`` dictionary
+        bruteforce : returns ``_bruteforce_capped``
+        PKDtree : return ``_pkdtree_capped`
+
+    """
+    methods = {'bruteforce': _bruteforce_capped,
+            'pkdtree': _pkdtree_capped}
+
+    if method is not None:
+        return methods[method]
+
+    if len(reference) > 5000 and len(configuration) > 5000:
+        if box is None:
+            min_dim = np.array([reference.min(axis=0),
+                               configuration.min(axis=0)])
+            max_dim = np.array([reference.max(axis=0),
+                               configuration.max(axis=0)])
+            size = max_dim.max(axis=0) - min_dim.min(axis=0)
+        elif np.allclose(box[3:], 90):
+            size = box[:3]
+        else:
+            tribox = triclinic_vectors(box)
+            size = tribox.max(axis=0) - tribox.min(axis=0)
+
+        if ((np.any(size < 10.0*max_cutoff) and
+                   len(reference) > 100000 and
+                   len(configuration) > 100000)):
+            return methods['bruteforce']
+        else:
+            return methods['pkdtree']
+    return methods['bruteforce']
+
+
+def _bruteforce_capped(reference, configuration, max_cutoff,
+                       min_cutoff=None, box=None):
+    """Internal method for bruteforce calculations
+
+    Uses naive distance calulations and returns a list
+    containing the indices with one from each
+    reference and configuration arrays, such that the distance between
+    them is less than the specified cutoff distance
+
+    Returns
+    -------
+    pairs : list
+        List of ``[(i, j)]`` pairs such that atom-index ``i`` is
+        from reference and ``j`` from configuration array
+    distance: list
+         Distance between ``reference[i]`` and ``configuration[j]``
+         atom coordinate
+
+    """
+    pairs, distance = [], []
+
+
+    reference = np.asarray(reference, dtype=np.float32)
+    configuration = np.asarray(configuration, dtype=np.float32)
+
+    if reference.shape == (3, ):
+        reference = reference[None, :]
+    if configuration.shape == (3, ):
+        configuration = configuration[None, :]
+
+    _check_array(reference, 'reference')
+    _check_array(configuration, 'configuration')
+
+    for i, coords in enumerate(reference):
+        dist = distance_array(coords[None, :], configuration, box=box)[0]
+        if min_cutoff is not None:
+            idx = np.where((dist < max_cutoff) & (dist > min_cutoff))[0]
+        else:
+            idx = np.where((dist < max_cutoff))[0]
+        for j in idx:
+            pairs.append((i, j))
+            distance.append(dist[j])
+    return pairs, distance
+
+
+def _pkdtree_capped(reference, configuration, max_cutoff,
+                    min_cutoff=None, box=None):
+    """ Capped Distance evaluations using KDtree.
+
+    Uses minimum image convention if *box* is specified
+
+    Returns:
+    --------
+    pairs : list
+        List of atom indices which are within the specified cutoff distance.
+        pairs `(i, j)` corresponds to i-th particle in reference and
+        j-th particle in configuration
+    distance : list
+        Distance between two atoms corresponding to the (i, j) indices
+        in pairs.
+
+    """
+    from .pkdtree import PeriodicKDTree
+
+    pairs, distances = [], []
+
+    reference = np.asarray(reference, dtype=np.float32)
+    configuration = np.asarray(configuration, dtype=np.float32)
+
+    if reference.shape == (3, ):
+        reference = reference[None, :]
+    if configuration.shape == (3, ):
+        configuration = configuration[None, :]
+
+    _check_array(reference, 'reference')
+    _check_array(configuration, 'configuration')
+
+    kdtree = PeriodicKDTree(box=box)
+    cut = max_cutoff if box is not None else None
+    kdtree.set_coords(configuration, cutoff=cut)
+    # Search for every query point
+    for idx, centers in enumerate(reference):
+        kdtree.search(centers, max_cutoff)
+        indices = kdtree.get_indices()
+        dist = distance_array(centers.reshape((1, 3)),
+                              configuration[indices], box=box)[0]
+        if min_cutoff is not None:
+            mask = np.where(dist > min_cutoff)[0]
+            dist = dist[mask]
+            indices = [indices[mask[i]] for i in range(len(mask))]
+        if len(indices) != 0:
+            for num, j in enumerate(indices):
+                pairs.append((idx, j))
+                distances.append(dist[num])
+    return pairs, distances
+
+
+def self_capped_distance(reference, max_cutoff, min_cutoff=None,
+                         box=None, method=None):
+    """Finds all the pairs and respective distances within a specified cutoff
+    for a configuration *reference*
+
+    If a *box* is supplied, then a minimum image convention is used
+    to evaluate the distances.
+
+    An automatic guessing of optimized method to calculate the distances is
+    included in the function. An optional keyword for the method is also
+    provided. Users can override the method with this functionality.
+    Currently pkdtree and bruteforce are implemented.
+
+    Parameters
+    -----------
+    reference : array
+        reference coordinates array with shape ``reference.shape = (3,)``
+        or ``reference.shape = (len(reference), 3)``
+    max_cutoff : float
+        Maximum cutoff distance to check the neighbors with itself
+    min_cutoff : (optional) float
+        Minimum cutoff distance [None]
+    box : (optional) array or None
+        The dimensions, if provided, must be provided in the same
+        The unitcell dimesions for this system format as returned
+        by :attr:`MDAnalysis.coordinates.base.Timestep.dimensions`:
+        ``[lx,ly, lz, alpha, beta, gamma]``. Minimum image convention
+        is applied if the box is provided [None]
+    method : (optional) 'bruteforce' or 'pkdtree' or 'None'
+        Keyword to override the automatic guessing of method built-in
+        in the function [None]
+
+    Returns
+    -------
+    pairs : array
+        Pair of indices such that distance between them is
+        within the ``max_cutoff`` and ``min_cutoff``
+    distances : array
+        Distances corresponding to each pair of indices.
+        d[k] corresponding to the pairs[i,j] gives the distance between
+        i-th and j-th coordinate in reference
+
+        .. code-block:: python
+
+            pairs, distances = self_capped_distances(reference, max_cutoff)
+            for indx, [a,b] in enumerate(pairs):
+                coord1, coords2 = reference[a], reference[b]
+                distance = distances[indx]
+
+    Note
+    -----
+    Currently only supports brute force and Periodic KDtree
+
+    .. SeeAlso:: :func:'MDAnalysis.lib.distances.self_distance_array'
+    .. SeeAlso:: :func:'MDAnalysis.lib.pkdtree.PeriodicKDTree'
+    """
+    if box is not None:
+        if box.shape[0] != 6:
+            raise ValueError('Box Argument is of incompatible type. The dimension'
+                         'should be either None or '
+                         'of the type [lx, ly, lz, alpha, beta, gamma]')
+    method = _determine_method_self(reference, max_cutoff,
+                                    min_cutoff=min_cutoff,
+                                    box=box, method=method)
+    pairs, dist = method(reference,  max_cutoff,
+                         min_cutoff=min_cutoff, box=box)
+
+    return np.asarray(pairs), np.asarray(dist)
+
+
+def _determine_method_self(reference, max_cutoff, min_cutoff=None,
+                           box=None, method=None):
+    """
+    Switch between different methods based on the the optimized time.
+    All the rules to select the method based on the input can be
+    incorporated here.
+
+    Parameters
+    ----------
+    reference : array
+        reference coordinates array with shape ``reference.shape = (3,)``
+        or ``reference.shape = (len(reference), 3)``
+    max_cutoff : float
+        Maximum cutoff distance
+    min_cutoff : (optional) float
+        Minimum cutoff distance [None]
+    box : (optional) array or None
+        The dimensions, if provided, must be provided in the same
+        The unitcell dimesions for this system format as returned
+        by :attr:`MDAnalysis.coordinates.base.Timestep.dimensions`:
+        ``[lx,ly, lz, alpha, beta, gamma]``. Minimum image convention
+        is applied if the box is provided [None]
+    method : (optional) 'bruteforce' or 'pkdtree' or 'None'
+        Keyword to override the automatic guessing of method built-in
+        in the function [None]
+
+    Returns
+    -------
+    Method : Function object
+        Returns function object based on the rules and specified method
+
+    Note
+    ----
+    Currently implemented methods are present in the ``methods`` dictionary
+        bruteforce : returns ``_bruteforce_capped_self``
+        PKDtree : return ``_pkdtree_capped_self``
+
+    """
+    methods = {'bruteforce': _bruteforce_capped_self,
+            'pkdtree': _pkdtree_capped_self}
+
+    if method is not None:
+        return methods[method]
+
+    if len(reference) > 5000:
+        if box is None:
+            min_dim = np.array([reference.min(axis=0)])
+            max_dim = np.array([reference.max(axis=0)])
+            size = max_dim.max(axis=0) - min_dim.min(axis=0)
+        elif np.allclose(box[3:], 90):
+            size = box[:3]
+        else:
+            tribox = triclinic_vectors(box)
+            size = tribox.max(axis=0) - tribox.min(axis=0)
+
+        if ((np.any(size < 10.0*max_cutoff) and
+                   (len(reference) > 100000))):
+            return methods['bruteforce']
+        else:
+            return methods['pkdtree']
+    return methods['bruteforce']
+
+
+def _bruteforce_capped_self(reference, max_cutoff, min_cutoff=None,
+                            box=None):
+    """Finds all the pairs among the *reference* coordinates within
+    a fixed distance using brute force method
+
+    Internal method using brute force method to evaluate all the pairs
+    of atoms within a fixed distance.
+
+    Returns
+    -------
+    pairs : array
+        Arrray of ``[i, j]`` pairs such that atom-index ``i``
+        and ``j`` from reference array are within the fixed distance
+    distance: array
+         Distance between ``reference[i]`` and ``reference[j]``
+         atom coordinate
+
+    """
+    pairs, distance = [], []
+
+    reference = np.asarray(reference, dtype=np.float32)
+    if reference.shape == (3, ):
+        reference = reference[None, :]
+    for i, coords in enumerate(reference):
+        # Each pair of atoms needs to be checked only once.
+        # Only calculate distance for atomA and atomB
+        # if atomidA < atomidB
+        dist = distance_array(coords[None, :], reference[i+1:],
+                             box=box)[0]
+
+        if min_cutoff is not None:
+            idx = np.where((dist < max_cutoff) & (dist > min_cutoff))[0]
+        else:
+            idx = np.where((dist < max_cutoff))[0]
+        for other_idx in idx:
+            # Actual atomid for atomB
+            # can be direclty obtained in this way
+            j = other_idx + 1 + i
+            pairs.append((i, j))
+            distance.append(dist[other_idx])
+    return np.asarray(pairs), np.asarray(distance)
+
+
+def _pkdtree_capped_self(reference, max_cutoff, min_cutoff=None,
+                         box=None):
+    """Finds all the pairs among the coordinates within a fixed distance
+    using PeriodicKDTree
+
+    Internal method using PeriodicKDTree method to evaluate all the pairs
+    of atoms within a fixed distance.
+
+    Returns
+    -------
+    pairs : array
+        Array of ``[(i, j)]`` pairs such that atom-index ``i``
+        and ``j`` from reference array are within the fixed distance
+    distance: array
+         Distance between ``reference[i]`` and ``reference[j]``
+         atom coordinate
+
+    """
+    from .pkdtree import PeriodicKDTree
+
+    reference = np.asarray(reference, dtype=np.float32)
+    if reference.shape == (3, ):
+        reference = reference[None, :]
+
+    pairs, distance = [], []
+    kdtree = PeriodicKDTree(box=box)
+    cut = max_cutoff if box is not None else None
+    kdtree.set_coords(reference, cutoff=cut)
+    pairs = kdtree.search_pairs(max_cutoff)
+    if pairs.size > 0:
+        refA, refB = pairs[:, 0], pairs[:, 1]
+        distance = calc_bonds(reference[refA], reference[refB], box=box)
+        if min_cutoff is not None:
+            mask = np.where(distance > min_cutoff)[0]
+            pairs, distance = pairs[mask], distance[mask]
+    return np.asarray(pairs), np.asarray(distance)
+
+
 def transform_RtoS(inputcoords, box, backend="serial"):
     """Transform an array of coordinates from real space to S space (aka lambda space)
 
@@ -413,7 +875,7 @@ def transform_RtoS(inputcoords, box, backend="serial"):
         The dimensions must be provided in the same format as returned
         by :attr:`MDAnalysis.coordinates.base.Timestep.dimensions`: ``[lx,
         ly, lz, alpha, beta, gamma]``.
-    backend : str
+    backend : str, optional
         Select the type of acceleration; "serial" is always available. Other
         possibilities are "OpenMP" (OpenMP).
 
@@ -421,6 +883,7 @@ def transform_RtoS(inputcoords, box, backend="serial"):
     -------
     outcoords : array
         A n x 3 array of fractional coordiantes.
+
 
     .. versionchanged:: 0.13.0
        Added *backend* keyword.
@@ -475,14 +938,14 @@ def transform_StoR(inputcoords, box, backend="serial"):
         The dimensions must be provided in the same format as returned
         by :attr:`MDAnalysis.coordinates.base.Timestep.dimensions`: ``[lx,
         ly, lz, alpha, beta, gamma]``.
-    backend : str
+    backend : str, optional
         Select the type of acceleration; "serial" is always available. Other
         possibilities are "OpenMP" (OpenMP).
 
     Returns
     -------
     outcoords : array
-        A n x 3 array of fracional coordiantes.
+        A n x 3 array of fractional coordiantes.
 
 
     .. versionchanged:: 0.13.0
@@ -879,3 +1342,53 @@ def apply_PBC(incoords, box, backend="serial"):
                backend=backend)
 
     return coords
+
+
+def calc_distance(a, b, box=None):
+    """Distance between a and b
+
+    Parameters
+    ----------
+    a, b : numpy.ndarray
+        single coordinate vectors
+    box : numpy.ndarray, optional
+        simulation box, if given periodic boundary conditions will be applied
+
+
+    .. versionadded:: 0.18.1
+    """
+    return calc_bonds(a[None, :], b[None, :], box=box)[0]
+
+
+def calc_angle(a, b, c, box=None):
+    """Angle (in degrees) between a, b and c, where b is apex of angle
+
+    Parameters
+    ----------
+    a, b, c : numpy.ndarray
+        single coordinate vectors
+    box : numpy.ndarray
+        simulation box if given periodic boundary conditions will be applied to
+        the vectors between atoms
+
+
+    .. versionadded:: 0.18.1
+    """
+    return np.rad2deg(calc_angles(a[None, :], b[None, :], c[None, :], box=box)[0])
+
+
+def calc_dihedral(a, b, c, d, box=None):
+    """Dihedral angle (in degrees) between planes (a, b, c) and (b, c, d)
+
+    Parameters
+    ----------
+    a, b, c, d : numpy.ndarray
+        single coordinate vectors
+    box : numpy.ndarray, optional
+        simulation box, if given periodic boundary conditions will be applied
+
+
+    .. versionadded:: 0.18.1
+    """
+    return np.rad2deg(
+        calc_dihedrals(a[None, :], b[None, :], c[None, :], d[None, :], box)[0])
