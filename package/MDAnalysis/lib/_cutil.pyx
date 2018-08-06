@@ -363,7 +363,7 @@ def find_fragments(np.int64_t[:] atoms, int[:, :] bondlist):
         this_frag.clear()
         # Grab a start point for next fragment
         frag_todo.insert(deref(todo.begin()))
-        # Loop until fragment fully exploredt
+        # Loop until fragment fully explored
         while not frag_todo.empty():
             for a in frag_todo:
                 if not frag_done.count(a):
