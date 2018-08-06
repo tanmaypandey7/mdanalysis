@@ -178,7 +178,7 @@ class TestFragments(object):
             getattr(u.atoms[10], 'fragment')
 
 
-def test_tpr_fragments(tpr_u):
+def test_tpr_fragments():
     frags = mda.Universe(TPR, XTC).atoms.fragments
 
     assert len(frags[0]) == 3341
