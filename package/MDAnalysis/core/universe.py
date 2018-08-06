@@ -117,7 +117,7 @@ from ..exceptions import NoDataError
 from ..lib import util
 from ..lib.log import ProgressMeter, _set_verbose
 from ..lib.util import cached, NamedStream, isstream
-from ..lib._cutil import find_fragments
+from ..lib.mdamath import find_fragments
 from . import groups
 from ._get_readers import get_reader_for, get_parser_for
 from .groups import (ComponentBase, GroupBase,

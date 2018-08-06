@@ -323,9 +323,9 @@ def find_fragments(np.int64_t[:] atoms, int[:, :] bondlist):
 
     Parameters
     ----------
-    atoms : numpy.ndarray
+    atoms : numpy.ndarray dtype int64
        array of nodes
-    bonds : numpy.ndarray
+    bonds : numpy.ndarray dtype int32
        array of edges.  Any edges which refer to nodes not in *atoms*
        will be ignored
 
@@ -366,8 +366,9 @@ def find_fragments(np.int64_t[:] atoms, int[:, :] bondlist):
         # Loop until fragment fully exploredt
         while not frag_todo.empty():
             for a in frag_todo:
-                frag_done.insert(a)
-                this_frag.push_back(a)
+                if not frag_done.count(a):
+                    this_frag.push_back(a)
+                    frag_done.insert(a)
                 for b in bondmap[a]:
                     if not frag_done.count(b):
                         frag_next.insert(b)
