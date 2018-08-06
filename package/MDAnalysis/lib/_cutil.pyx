@@ -30,8 +30,11 @@ from MDAnalysis import NoDataError
 
 from libcpp.set cimport set as cset
 from libcpp.map cimport map as cmap
+from libcpp.vector cimport vector
+from cython.operator cimport dereference as deref
 
-__all__ = ['unique_int_1d', 'make_whole']
+
+__all__ = ['unique_int_1d', 'make_whole', 'find_fragments']
 
 cdef extern from "calc_distances.h":
     ctypedef float coordinate[3]
@@ -311,3 +314,70 @@ cdef float _norm(float * a):
     for n in range(3):
         result += a[n]*a[n]
     return sqrt(result)
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def find_fragments(np.int64_t[:] atoms, int[:, :] bondlist):
+    """Calculate distinct fragments from nodes and edges
+
+    Parameters
+    ----------
+    atoms : numpy.ndarray
+       array of nodes
+    bonds : numpy.ndarray
+       array of edges.  Any edges which refer to nodes not in *atoms*
+       will be ignored
+
+    Returns
+    -------
+    fragments : list
+       list of arrays, each containing the indices of a fragment
+
+    .. versionaddded:: 0.19.0
+    """
+    cdef intmap bondmap
+    cdef intset todo, frag_todo, frag_done, frag_next
+    cdef vector[int] this_frag
+    cdef int i, a, b
+
+    # grab record of which atoms I have to process
+    # ie set of all nodes
+    for i in range(atoms.shape[0]):
+        todo.insert(atoms[i])
+    # Process edges into map
+    for i in range(bondlist.shape[0]):
+        a = bondlist[i, 0]
+        b = bondlist[i, 1]
+        # only include edges if both are known nodes
+        if todo.count(a) and todo.count(b):
+            bondmap[a].insert(b)
+            bondmap[b].insert(a)
+
+    frags = []
+
+    while not todo.empty():  # While not all nodes have been done
+        # Start a new fragment
+        frag_todo.clear()
+        frag_done.clear()
+        this_frag.clear()
+        # Grab a start point for next fragment
+        frag_todo.insert(deref(todo.begin()))
+        # Loop until fragment fully exploredt
+        while not frag_todo.empty():
+            for a in frag_todo:
+                frag_done.insert(a)
+                this_frag.push_back(a)
+                for b in bondmap[a]:
+                    if not frag_done.count(b):
+                        frag_next.insert(b)
+            # update todo list
+            frag_todo.clear()
+            frag_todo.swap(frag_next)
+        # Add fragment to output
+        frags.append(np.asarray(this_frag))
+        # Remove all contents of frag from the todo list
+        for i in frag_done:
+            todo.erase(i)
+
+    return frags
