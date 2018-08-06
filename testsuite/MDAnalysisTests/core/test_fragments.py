@@ -28,6 +28,7 @@ from numpy.testing import (
 )
 import pytest
 
+import MDAnalysis as mda
 from MDAnalysis.core.topologyattrs import Bonds
 from MDAnalysis.core import groups
 from MDAnalysis import NoDataError
