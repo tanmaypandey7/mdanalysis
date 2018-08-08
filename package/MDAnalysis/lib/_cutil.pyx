@@ -318,7 +318,7 @@ cdef float _norm(float * a):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def find_fragments(np.int64_t[:] atoms, int[:, :] bondlist):
+def find_fragments(np.int64_t[:] atoms, np.int32_t[:, :] bondlist):
     """Calculate distinct fragments from nodes and edges
 
     Parameters
