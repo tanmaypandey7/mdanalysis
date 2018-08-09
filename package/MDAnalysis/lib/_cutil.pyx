@@ -318,7 +318,7 @@ cdef float _norm(float * a):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def find_fragments(np.int64_t[:] atoms, np.int32_t[:, :] bondlist):
+def find_fragments(atoms, bondlist):
     """Calculate distinct fragments from nodes and edges
 
     Parameters
@@ -340,13 +340,18 @@ def find_fragments(np.int64_t[:] atoms, np.int32_t[:, :] bondlist):
     cdef intset todo, frag_todo, frag_done, frag_next
     cdef vector[int] this_frag
     cdef int i, a, b
+    cdef np.int64_t[:] atoms_view
+    cdef np.int32_t[:, :] bonds_view
+
+    atoms_view = np.asarray(atoms, dtype=np.int64)
+    bonds_view = np.asarray(bondlist, dtype=np.int32)
 
     # grab record of which atoms I have to process
     # ie set of all nodes
-    for i in range(atoms.shape[0]):
-        todo.insert(atoms[i])
+    for i in range(atoms_view.shape[0]):
+        todo.insert(atoms_view[i])
     # Process edges into map
-    for i in range(bondlist.shape[0]):
+    for i in range(bonds_view.shape[0]):
         a = bondlist[i, 0]
         b = bondlist[i, 1]
         # only include edges if both are known nodes
